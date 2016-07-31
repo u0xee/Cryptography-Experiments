@@ -1,14 +1,13 @@
-import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.math.MathContext;
-import java.math.RoundingMode;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Random;
+import java.util.Set;
+import java.util.TreeSet;
 
 public class ThresholdScheme {
     public static final String description =
@@ -17,11 +16,16 @@ public class ThresholdScheme {
     "secret bytes and a byte of the xor of odd secret bytes";
 
     public final BigInteger prime;
-    public final BigInteger[][] points;
+    public final Set<XY> points;
 
     private static final Random rng = new SecureRandom();
 
     public ThresholdScheme(byte[] originalSecret, int k, int n) {
+        if(originalSecret == null || originalSecret.length == 0)
+            throw new IllegalArgumentException("Secret must be at least one byte");
+        if(!(2 <= k && k <= n))
+            throw new IllegalArgumentException("Assertion failed: 2 <= k <= n");
+
         byte[] padded = prePadOneAndEvenOddXor(originalSecret);
         BigInteger secret = new BigInteger(padded);
 
@@ -33,12 +37,15 @@ public class ThresholdScheme {
         for(int i = 1; i < coeff.length; ++i)
             coeff[i] = new BigInteger(secretLength, rng);
 
-        points = new BigInteger[n][];
-        for(int i = 0; i < points.length; ++i) {
+        Set<XY> p = new TreeSet<>();
+        for(int i = 0; i < n; ++i) {
             BigInteger x = BigInteger.valueOf(i + 1);
             BigInteger fx = evalPolynomialMod(coeff, x, prime);
-            points[i] = new BigInteger[] {x, fx};
+
+            p.add(new XY(x, fx));
         }
+
+        points = Collections.unmodifiableSet(p);
     }
 
     public static BigInteger evalPolynomialMod(BigInteger[] coeff,
@@ -69,40 +76,31 @@ public class ThresholdScheme {
         return padded;
     }
 
-    public static byte[] reconstructSecret(BigInteger prime, BigInteger[][] points) {
+    public static byte[] reconstructSecret(BigInteger prime, Collection<XY> points) {
         BigInteger coeff0 = BigInteger.ZERO;
 
-        for(int i = 0; i < points.length; ++i) {
-            BigInteger x_i = points[i][0], y_i = points[i][1],
-                       top = y_i, bot = BigInteger.ONE;
+        for(XY point : points) {
+            BigInteger top = point.y, bot = BigInteger.ONE;
 
-            for(int j = 0; j < points.length; ++j)
-                if(j != i) {
-                    BigInteger x_j = points[j][0];
-                    top = top.multiply(x_j);
-                    bot = bot.multiply(x_j.subtract(x_i));
+            for(XY p : points)
+                if(!p.x.equals(point.x)) { // don't want divisor of 0
+                    top = top.multiply(p.x);
+                    bot = bot.multiply(p.x.subtract(point.x));
                 }
-            System.out.println("x_i = " + x_i + ", y_i = " + y_i);
-            System.out.println("top = " + top + ", bot = " + bot);
 
-            //BigDecimal quotient = new BigDecimal(top).divide(new BigDecimal(bot), 10, RoundingMode.HALF_UP);
-            coeff0 = coeff0.add(top.multiply(bot.modInverse(prime))).mod(prime);
-            System.out.println("coeff0 = " + coeff0);
+            BigInteger quot = top.multiply(bot.modInverse(prime)).mod(prime);
+            coeff0 = coeff0.add(quot).mod(prime);
         }
 
-        //System.out.println("coeff = " + coeff0.setScale(0, RoundingMode.HALF_UP).toBigInteger().mod(prime));
-
-        BigInteger secret = coeff0;//coeff0.setScale(0, RoundingMode.HALF_UP).toBigInteger().mod(prime);
+        BigInteger secret = coeff0;
 
         byte[] padded = secret.toByteArray();
-        byte[] originalSecret = Arrays.copyOfRange(padded, 3, padded.length);
+        byte[] originalSecret =
+            Arrays.copyOfRange(padded, Math.min(3, padded.length), padded.length);
         byte[] xors = evenOddXor(originalSecret);
 
-        if(padded[0] != 1 || padded[1] != xors[0] || padded[2] != xors[1]) {
-            System.out.println("padded[0] = " + padded[0]);
-            System.out.println("padded[1] = " + padded[1] + " xors[0] = " + xors[0]);
-            System.out.println("padded[2] = " + padded[2] + " xors[1] = " + xors[1]);
-            throw new IllegalStateException("Constructed secret invalid: " +
+        if(padded.length < 3 || padded[0] != 1 || padded[1] != xors[0] || padded[2] != xors[1]) {
+            throw new IllegalStateException("Reconstructed secret is invalid: " +
                 "too few points or wrong prime/points!");
         }
 
@@ -111,26 +109,65 @@ public class ThresholdScheme {
 
     @Override
     public String toString() {
-        StringBuilder sb = new StringBuilder();
-        String p = prime.toString();
-        sb.append(String.format("Prime %s\nPoints:\n", p));
-        for(int i = 0; i < points.length; ++i)
-            sb.append(String.format("%s, %s\n",
-                points[i][0], points[i][1]));
-        return sb.toString();
+        return String.format("Prime: %s\nPoints:\n%s", prime, points);
     }
 
     public static void main(String[] args) {
         byte[] secret = args[0].getBytes();
-        ThresholdScheme scheme = new ThresholdScheme(secret, 3, 6);
+        ThresholdScheme scheme = new ThresholdScheme(secret, 4, 16);
         System.out.println(scheme);
 
-        BigInteger[][] three = new BigInteger[3][];
-        three[0] = scheme.points[Integer.parseInt(args[1])];
-        three[1] = scheme.points[Integer.parseInt(args[2])];
-        three[2] = scheme.points[Integer.parseInt(args[3])];
+        /*
+        List<XY> points = new ArrayList<>(scheme.points);
 
-        byte[] reconstructed = reconstructSecret(scheme.prime, three);
-        System.out.println(new String(reconstructed));
+        for(int i = 0; i < 15; ++i) {
+            Collections.shuffle(points);
+            List<XY> p = new ArrayList<>();
+            for(int j = 0; j < 8; ++j)
+                p.add(points.get(j));
+
+            System.out.println("Trying with " + p);
+            try {
+                byte[] reconstructed = reconstructSecret(scheme.prime, p);
+                System.out.println("It worked!!");
+            } catch (IllegalStateException e) {
+                System.out.println("Didn't work");
+            }
+        }
+        */
+    }
+
+    public static class XY implements Comparable<XY> {
+        public final BigInteger x;
+        public final BigInteger y;
+        public XY(BigInteger x, BigInteger y) { this.x = x; this.y = y; }
+
+        @Override
+        public boolean equals(Object o) {
+            if(o == null) return false;
+            if(this == o) return true;
+            if(o instanceof XY) {
+                XY xy = (XY) o;
+                return x.equals(xy.x) && y.equals(xy.y);
+            }
+            return false;
+        }
+
+        @Override
+        public int hashCode() {
+            return x.hashCode() ^ y.hashCode();
+        }
+
+        @Override
+        public String toString() {
+            return String.format("[%s, %s]", x, y);
+        }
+
+        @Override
+        public int compareTo(XY other) {
+            int a = x.compareTo(other.x);
+            if(a != 0) return a;
+            return y.compareTo(other.y);
+        }
     }
 }
