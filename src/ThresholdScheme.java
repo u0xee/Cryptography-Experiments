@@ -114,7 +114,9 @@ public class ThresholdScheme {
 
     public static void main(String[] args) {
         byte[] secret = args[0].getBytes();
-        ThresholdScheme scheme = new ThresholdScheme(secret, 4, 16);
+        int k = Integer.parseInt(args[1]);
+        int n = Integer.parseInt(args[2]);
+        ThresholdScheme scheme = new ThresholdScheme(secret, k, n);
         System.out.println(scheme);
 
         /*
